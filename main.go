@@ -5,8 +5,8 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/rashintha/logger"
 	"github.com/xuri/excelize/v2"
-	"rashintha.com/sftp/users-creator/pkg/logger"
 )
 
 func main() {
