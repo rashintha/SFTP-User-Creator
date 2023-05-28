@@ -1,3 +1,7 @@
 log/*
 *.xlsx
 !example.xlsx
+qr/*
+*.docx
+doc/*
+documents/*
