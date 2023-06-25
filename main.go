@@ -23,7 +23,8 @@ import (
 func main() {
 
 	frequency, err := strconv.Atoi(env.CONF["FREQUENCY"])
-	in_folder := env.CONF["IN"]
+	inDir := env.CONF["IN"]
+	processedDir := env.CONF["PROCESSED"]
 
 	if err != nil {
 		logger.ErrorFatal(err.Error())
@@ -34,22 +35,20 @@ func main() {
 	go func() {
 		for t := range ticker.C {
 			fmt.Println(t)
-			files, err := ioutil.ReadDir(in_folder)
+			files, err := ioutil.ReadDir(inDir)
 			if err != nil {
 				logger.Errorln(err.Error())
 			}
 
 			if len(files) == 0 {
-				logger.Warningf("No files found in the %s directory.", in_folder)
+				logger.Warningf("No files found in the %s directory.", inDir)
 			}
 
 		FilesLoop:
 			for _, file := range files {
-				fmt.Println(file.Name())
-
 				// Opening file
 				logger.Defaultf("Opening file: %v", file.Name())
-				f, err := excelize.OpenFile(in_folder + "/" + file.Name())
+				f, err := excelize.OpenFile(inDir + "/" + file.Name())
 				if err != nil {
 					logger.Errorln(err.Error())
 					continue
@@ -83,93 +82,181 @@ func main() {
 
 				logger.Defaultln("Creating SFTP users.")
 
-				for _, row := range rows[1:] {
-					logger.Defaultf("Creating user: %v", row[0])
-					cmd := exec.Command("sudo", "useradd", "-m", row[0], "-g", "sftpusers") // replace "ls -l" with your command
+				f.SetCellValue("Users", "B1", "Results")
+
+			UserCreatingLoop:
+				for i, row := range rows[1:] {
+					cellIndex := fmt.Sprintf("B%d", i+2)
+
+					username := strings.ToLower(strings.ReplaceAll(row[0], " ", "_"))
+
+					logger.Defaultf("Creating user: %v for entry %v", username, row[0])
+					cmd := exec.Command("sudo", "useradd", "-m", username, "-g", "sftpusers") // replace "ls -l" with your command
 
 					// This will capture the output from the command
 					output, err := cmd.CombinedOutput()
 					if err != nil {
 						logger.Errorln(strings.TrimSuffix(string(output), "\n"))
 						logger.Errorln(err.Error())
-						continue FilesLoop
+						f.SetCellValue("Users", cellIndex, fmt.Sprintf("%s | %s", strings.TrimSuffix(string(output), "\n"), err.Error()))
+
+						err = saveExcel(f)
+						if err != nil {
+							logger.Errorln(err.Error())
+						}
+
+						continue UserCreatingLoop
 					}
 
 					password := generatePassword(12)
 
 					logger.Defaultln("Updating password")
-					cmd = exec.Command("bash", "-c", "echo", fmt.Sprintf("'%v:%v'", row[0], password), "|", "sudo", "chpasswd") // replace "ls -l" with your command
+					cmd = exec.Command("bash", "-c", "echo", fmt.Sprintf("'%v:%v'", username, password), "|", "sudo", "chpasswd") // replace "ls -l" with your command
 
 					// This will capture the output from the command
 					output, err = cmd.CombinedOutput()
 					if err != nil {
 						logger.Errorln(strings.TrimSuffix(string(output), "\n"))
 						logger.Errorln(err.Error())
-						continue FilesLoop
+						f.SetCellValue("Users", cellIndex, fmt.Sprintf("%s | %s", strings.TrimSuffix(string(output), "\n"), err.Error()))
+
+						err = saveExcel(f)
+						if err != nil {
+							logger.Errorln(err.Error())
+						}
+
+						continue UserCreatingLoop
 					}
 
 					logger.Defaultln("Creating directories")
 
-					err = createDir("files", row[0])
+					err = createDir("files", username)
 					if err != nil {
 						logger.Errorln(err.Error())
-						continue FilesLoop
+						f.SetCellValue("Users", cellIndex, err.Error())
+
+						err = saveExcel(f)
+						if err != nil {
+							logger.Errorln(err.Error())
+						}
+
+						continue UserCreatingLoop
 					}
 
 					logger.Defaultln("Changing root directory ownership to root.")
-					cmd = exec.Command("sudo", "chown", "root:root", fmt.Sprintf("/var/sftp/%v", row[0])) // replace "ls -l" with your command
+					cmd = exec.Command("sudo", "chown", "root:root", fmt.Sprintf("/var/sftp/%v", username)) // replace "ls -l" with your command
 
 					// This will capture the output from the command
 					output, err = cmd.CombinedOutput()
 					if err != nil {
 						logger.Errorln(strings.TrimSuffix(string(output), "\n"))
 						logger.Errorln(err.Error())
-						continue FilesLoop
+						f.SetCellValue("Users", cellIndex, err.Error())
+
+						err = saveExcel(f)
+						if err != nil {
+							logger.Errorln(err.Error())
+						}
+
+						continue UserCreatingLoop
 					}
 
 					logger.Defaultln("Changing root directory permissions.")
-					cmd = exec.Command("sudo", "chmod", "755", fmt.Sprintf("/var/sftp/%v", row[0])) // replace "ls -l" with your command
+					cmd = exec.Command("sudo", "chmod", "755", fmt.Sprintf("/var/sftp/%v", username)) // replace "ls -l" with your command
 
 					// This will capture the output from the command
 					output, err = cmd.CombinedOutput()
 					if err != nil {
 						logger.Errorln(strings.TrimSuffix(string(output), "\n"))
 						logger.Errorln(err.Error())
-						continue FilesLoop
+						f.SetCellValue("Users", cellIndex, fmt.Sprintf("%s | %s", strings.TrimSuffix(string(output), "\n"), err.Error()))
+
+						err = saveExcel(f)
+						if err != nil {
+							logger.Errorln(err.Error())
+						}
+
+						continue UserCreatingLoop
 					}
 
 					for _, dirRow := range dirRows {
-						err = createDir(dirRow[0], row[0])
+						err = createDir(dirRow[0], username)
 						if err != nil {
 							logger.Errorln(err.Error())
-							continue FilesLoop
+							f.SetCellValue("Users", cellIndex, err.Error())
+
+							err = saveExcel(f)
+							if err != nil {
+								logger.Errorln(err.Error())
+							}
+
+							continue UserCreatingLoop
 						}
 					}
 
-					secret, _, err := googleAuthenticator(row[0])
+					secret, _, err := googleAuthenticator(username)
 					if err != nil {
 						logger.Errorln(err.Error())
-						continue FilesLoop
+						f.SetCellValue("Users", cellIndex, err.Error())
+
+						err = saveExcel(f)
+						if err != nil {
+							logger.Errorln(err.Error())
+						}
+
+						continue UserCreatingLoop
 					}
 
-					err = prepareDoc(row[0], password, secret)
+					err = prepareDoc(username, password, secret)
 					if err != nil {
 						logger.Errorln(err.Error())
-						continue FilesLoop
+						f.SetCellValue("Users", cellIndex, err.Error())
+
+						err = saveExcel(f)
+						if err != nil {
+							logger.Errorln(err.Error())
+						}
+
+						continue UserCreatingLoop
 					}
+
+					f.SetCellValue("Users", cellIndex, "Success")
+				}
+
+				logger.Defaultf("Saving results to excel file.")
+				err = saveExcel(f)
+				if err != nil {
+					logger.Errorln(err.Error())
+				}
+
+				currentTime := time.Now().UTC()
+				currentTimeString := strings.ReplaceAll(strings.ReplaceAll(currentTime.Format("2006-01-02T15:04:05Z07:00"), "-", ""), ":", "")
+
+				oldFile := fmt.Sprintf("%s/%s", inDir, file.Name())
+				newFile := fmt.Sprintf("%s/%s_%v.xlsx", processedDir, file.Name()[0:len(file.Name())-5], currentTimeString)
+
+				logger.Defaultf("Moving file %v -> %v", oldFile, newFile)
+
+				fmt.Println(oldFile)
+				fmt.Println(newFile)
+
+				err = os.Rename(oldFile, newFile)
+				if err != nil {
+					logger.Errorln(err.Error())
 				}
 			}
 		}
 	}()
 
 	select {}
+}
 
-	// if len(os.Args) < 2 {
-	// 	logger.ErrorFatal("File name is not provided.")
-	// }
+func saveExcel(f *excelize.File) error {
+	if err := f.Save(); err != nil {
+		return err
+	}
 
-	// fileName := os.Args[1]
-
+	return nil
 }
 
 func prepareDoc(user string, password string, secret string) error {
