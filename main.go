@@ -2,14 +2,19 @@ package main
 
 import (
 	"archive/zip"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
+	"github.com/rashintha/env"
 	"github.com/rashintha/logger"
 	"github.com/skip2/go-qrcode"
 	"github.com/xuri/excelize/v2"
@@ -17,107 +22,164 @@ import (
 
 func main() {
 
-	if len(os.Args) < 2 {
-		logger.ErrorFatal("File name is not provided.")
-	}
+	frequency, err := strconv.Atoi(env.CONF["FREQUENCY"])
+	in_folder := env.CONF["IN"]
 
-	fileName := os.Args[1]
-
-	// Opening file
-	logger.Defaultf("Opening file: %v", fileName)
-	f, err := excelize.OpenFile(fileName)
 	if err != nil {
 		logger.ErrorFatal(err.Error())
 	}
 
-	logger.Defaultf("Reading file: %v", fileName)
-	rows, err := f.GetRows("Users")
-	if err != nil {
-		logger.ErrorFatal(err.Error())
-	}
+	ticker := time.NewTicker(time.Duration(frequency) * time.Minute)
 
-	dirRows, err := f.GetRows("Folders")
-	if err != nil {
-		logger.ErrorFatal(err.Error())
-	}
+	go func() {
+		for t := range ticker.C {
+			fmt.Println(t)
+			files, err := ioutil.ReadDir(in_folder)
+			if err != nil {
+				logger.Errorln(err.Error())
+			}
 
-	logger.Defaultln("Validating the file content.")
-	if rows[0][0] != "Username" || rows[0][1] != "Password" {
-		logger.ErrorFatal("Header row values are invalid.")
-	}
+			if len(files) == 0 {
+				logger.Warningf("No files found in the %s directory.", in_folder)
+			}
 
-	for _, row := range rows[1:] {
-		if row[0] == "" || row[1] == "" {
-			logger.ErrorFatalf("Invalid row entry at %v : %v", row[0], row[1])
+		FilesLoop:
+			for _, file := range files {
+				fmt.Println(file.Name())
+
+				// Opening file
+				logger.Defaultf("Opening file: %v", file.Name())
+				f, err := excelize.OpenFile(in_folder + "/" + file.Name())
+				if err != nil {
+					logger.Errorln(err.Error())
+					continue
+				}
+
+				logger.Defaultf("Reading file: %v", file.Name())
+				rows, err := f.GetRows("Users")
+				if err != nil {
+					logger.Errorln(err.Error())
+					continue
+				}
+
+				dirRows, err := f.GetRows("Folders")
+				if err != nil {
+					logger.Errorln(err.Error())
+					continue
+				}
+
+				logger.Defaultln("Validating the file content.")
+				if rows[0][0] != "Username" {
+					logger.Errorln("Header row values are invalid.")
+					continue
+				}
+
+				for _, row := range rows[1:] {
+					if row[0] == "" {
+						logger.Errorf("Invalid row entry at %v", row[0])
+						continue FilesLoop
+					}
+				}
+
+				logger.Defaultln("Creating SFTP users.")
+
+				for _, row := range rows[1:] {
+					logger.Defaultf("Creating user: %v", row[0])
+					cmd := exec.Command("sudo", "useradd", "-m", row[0], "-g", "sftpusers") // replace "ls -l" with your command
+
+					// This will capture the output from the command
+					output, err := cmd.CombinedOutput()
+					if err != nil {
+						logger.Errorln(strings.TrimSuffix(string(output), "\n"))
+						logger.Errorln(err.Error())
+						continue FilesLoop
+					}
+
+					password := generatePassword(12)
+
+					logger.Defaultln("Updating password")
+					cmd = exec.Command("bash", "-c", "echo", fmt.Sprintf("'%v:%v'", row[0], password), "|", "sudo", "chpasswd") // replace "ls -l" with your command
+
+					// This will capture the output from the command
+					output, err = cmd.CombinedOutput()
+					if err != nil {
+						logger.Errorln(strings.TrimSuffix(string(output), "\n"))
+						logger.Errorln(err.Error())
+						continue FilesLoop
+					}
+
+					logger.Defaultln("Creating directories")
+
+					err = createDir("files", row[0])
+					if err != nil {
+						logger.Errorln(err.Error())
+						continue FilesLoop
+					}
+
+					logger.Defaultln("Changing root directory ownership to root.")
+					cmd = exec.Command("sudo", "chown", "root:root", fmt.Sprintf("/var/sftp/%v", row[0])) // replace "ls -l" with your command
+
+					// This will capture the output from the command
+					output, err = cmd.CombinedOutput()
+					if err != nil {
+						logger.Errorln(strings.TrimSuffix(string(output), "\n"))
+						logger.Errorln(err.Error())
+						continue FilesLoop
+					}
+
+					logger.Defaultln("Changing root directory permissions.")
+					cmd = exec.Command("sudo", "chmod", "755", fmt.Sprintf("/var/sftp/%v", row[0])) // replace "ls -l" with your command
+
+					// This will capture the output from the command
+					output, err = cmd.CombinedOutput()
+					if err != nil {
+						logger.Errorln(strings.TrimSuffix(string(output), "\n"))
+						logger.Errorln(err.Error())
+						continue FilesLoop
+					}
+
+					for _, dirRow := range dirRows {
+						err = createDir(dirRow[0], row[0])
+						if err != nil {
+							logger.Errorln(err.Error())
+							continue FilesLoop
+						}
+					}
+
+					secret, _, err := googleAuthenticator(row[0])
+					if err != nil {
+						logger.Errorln(err.Error())
+						continue FilesLoop
+					}
+
+					err = prepareDoc(row[0], password, secret)
+					if err != nil {
+						logger.Errorln(err.Error())
+						continue FilesLoop
+					}
+				}
+			}
 		}
-	}
+	}()
 
-	logger.Defaultln("Creating SFTP users.")
+	select {}
 
-	for _, row := range rows[1:] {
-		logger.Defaultf("Creating user: %v", row[0])
-		cmd := exec.Command("sudo", "useradd", "-m", row[0], "-g", "sftpusers") // replace "ls -l" with your command
+	// if len(os.Args) < 2 {
+	// 	logger.ErrorFatal("File name is not provided.")
+	// }
 
-		// This will capture the output from the command
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			logger.Errorln(strings.TrimSuffix(string(output), "\n"))
-			logger.ErrorFatal(err.Error())
-		}
+	// fileName := os.Args[1]
 
-		logger.Defaultln("Updating password")
-		cmd = exec.Command("bash", "-c", "echo", fmt.Sprintf("'%v:%v'", row[0], row[1]), "|", "sudo", "chpasswd") // replace "ls -l" with your command
-
-		// This will capture the output from the command
-		output, err = cmd.CombinedOutput()
-		if err != nil {
-			logger.Errorln(strings.TrimSuffix(string(output), "\n"))
-			logger.ErrorFatal(err.Error())
-		}
-
-		logger.Defaultln("Creating directories")
-
-		createDir("files", row[0])
-
-		logger.Defaultln("Changing root directory ownership to root.")
-		cmd = exec.Command("sudo", "chown", "root:root", fmt.Sprintf("/var/sftp/%v", row[0])) // replace "ls -l" with your command
-
-		// This will capture the output from the command
-		output, err = cmd.CombinedOutput()
-		if err != nil {
-			logger.Errorln(strings.TrimSuffix(string(output), "\n"))
-			logger.ErrorFatal(err.Error())
-		}
-
-		logger.Defaultln("Changing root directory permissions.")
-		cmd = exec.Command("sudo", "chmod", "755", fmt.Sprintf("/var/sftp/%v", row[0])) // replace "ls -l" with your command
-
-		// This will capture the output from the command
-		output, err = cmd.CombinedOutput()
-		if err != nil {
-			logger.Errorln(strings.TrimSuffix(string(output), "\n"))
-			logger.ErrorFatal(err.Error())
-		}
-
-		for _, dirRow := range dirRows {
-			createDir(dirRow[0], row[0])
-		}
-
-		secret, _ := googleAuthenticator(row[0])
-
-		prepareDoc(row[0], row[1], secret)
-
-	}
 }
 
-func prepareDoc(user string, password string, secret string) {
+func prepareDoc(user string, password string, secret string) error {
 	logger.Defaultf("Preparing word document")
 
 	logger.Defaultf("Removing existing doc processing folders")
 
 	err := os.RemoveAll("doc")
 	if err != nil {
-		logger.Errorf("Failed removing directory: %s", err)
+		return err
 	}
 
 	logger.Defaultf("Unzipping the sample document.")
@@ -125,7 +187,7 @@ func prepareDoc(user string, password string, secret string) {
 
 	err = cmd.Run()
 	if err != nil {
-		logger.ErrorFatalf("Unzip command failed with %s\n", err)
+		return err
 	}
 
 	logger.Defaultf("Copying qr code to document")
@@ -133,27 +195,27 @@ func prepareDoc(user string, password string, secret string) {
 	// Open source file for reading
 	srcFile, err := os.Open(fmt.Sprintf("qr/%v.png", user))
 	if err != nil {
-		logger.ErrorFatal(err.Error())
+		return err
 	}
 	defer srcFile.Close()
 
 	// Open destination file for writing
 	dstFile, err := os.Create("doc/word/media/image2.png")
 	if err != nil {
-		logger.ErrorFatal(err.Error())
+		return err
 	}
 	defer dstFile.Close()
 
 	// Copy the source file to the destination file
 	_, err = io.Copy(dstFile, srcFile)
 	if err != nil {
-		logger.ErrorFatal(err.Error())
+		return err
 	}
 
 	// Sync to ensure that the copy operation is complete before the program exits
 	err = dstFile.Sync()
 	if err != nil {
-		logger.ErrorFatal(err.Error())
+		return err
 	}
 
 	logger.Defaultf("Updating the document")
@@ -162,7 +224,7 @@ func prepareDoc(user string, password string, secret string) {
 	// Read the file
 	content, err := ioutil.ReadFile(docPath)
 	if err != nil {
-		logger.ErrorFatalf("Error reading file: %s", err)
+		return err
 	}
 
 	// Replace the phrase
@@ -173,25 +235,27 @@ func prepareDoc(user string, password string, secret string) {
 	// Write the new content back to the file
 	err = ioutil.WriteFile(docPath, []byte(newContent), 0644)
 	if err != nil {
-		logger.ErrorFatalf("Error writing file: %s", err)
+		return err
 	}
 
-	logger.Defaultf("Creating documents directory if not exists")
-	cmd = exec.Command("sudo", "mkdir", "-p", "documents") // replace "ls -l" with your command
+	out_dir := env.CONF["OUT"]
+
+	logger.Defaultf("Creating OUT directory if not exists")
+	cmd = exec.Command("sudo", "mkdir", "-p", out_dir) // replace "ls -l" with your command
 
 	// This will capture the output from the command
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		logger.Errorln(strings.TrimSuffix(string(output), "\n"))
-		logger.ErrorFatal(err.Error())
+		return err
 	}
 
 	logger.Defaultf("Creating the updated document")
 
 	// Create a file to write our archive to.
-	file, err := os.Create(fmt.Sprintf("documents/%v.docx", user))
+	file, err := os.Create(fmt.Sprintf("%v/%v.docx", out_dir, user))
 	if err != nil {
-		logger.ErrorFatalf("Error creating docx file: %s", err)
+		return err
 	}
 	defer file.Close()
 
@@ -247,17 +311,19 @@ func prepareDoc(user string, password string, secret string) {
 
 		return nil
 	}); err != nil {
-		logger.ErrorFatalf("Error writing file: %s", err)
+		return err
 	}
 
 	// Make sure to check the error on Close.
 	err = w.Close()
 	if err != nil {
-		logger.ErrorFatalf("Error closing writer: %s", err)
+		return err
 	}
+
+	return nil
 }
 
-func createDir(dir string, user string) {
+func createDir(dir string, user string) error {
 	dirPath := fmt.Sprintf("/var/sftp/%v/%v", user, dir)
 
 	logger.Defaultf("Creating directory: %v", dirPath)
@@ -267,7 +333,7 @@ func createDir(dir string, user string) {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		logger.Errorln(strings.TrimSuffix(string(output), "\n"))
-		logger.ErrorFatal(err.Error())
+		return err
 	}
 
 	logger.Defaultf("Changing directory ownership to %v.", user)
@@ -277,7 +343,7 @@ func createDir(dir string, user string) {
 	output, err = cmd.CombinedOutput()
 	if err != nil {
 		logger.Errorln(strings.TrimSuffix(string(output), "\n"))
-		logger.ErrorFatal(err.Error())
+		return err
 	}
 
 	logger.Defaultln("Changing root directory permissions.")
@@ -287,11 +353,27 @@ func createDir(dir string, user string) {
 	output, err = cmd.CombinedOutput()
 	if err != nil {
 		logger.Errorln(strings.TrimSuffix(string(output), "\n"))
-		logger.ErrorFatal(err.Error())
+		return err
 	}
+
+	return nil
 }
 
-func googleAuthenticator(user string) (string, []string) {
+func generatePassword(length int) string {
+	rand.Seed(time.Now().UnixNano())
+	digits := "0123456789"
+	specials := "~=+%^*/()[]{}/!@#$?|"
+	all := "ABCDEFGHIJKLMNOPQRSTUVWXYZ" +
+		"abcdefghijklmnopqrstuvwxyz" +
+		digits + specials
+	buf := make([]byte, length)
+	for i := range buf {
+		buf[i] = all[rand.Intn(len(all))]
+	}
+	return string(buf)
+}
+
+func googleAuthenticator(user string) (string, []string, error) {
 	logger.Defaultln("Enabling Google authenticator")
 
 	cmd := exec.Command("sudo", "-u", user, "google-authenticator", "-t", "-d", "-r3", "-R30", "-f", "-C", "-w3", "-Q", "UTF8") // replace "ls -l" with your command
@@ -299,7 +381,7 @@ func googleAuthenticator(user string) (string, []string) {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		logger.Errorln(strings.TrimSuffix(string(output), "\n"))
-		logger.ErrorFatal(err.Error())
+		return "", nil, err
 	}
 
 	logger.Defaultf("Generating the QR Code")
@@ -308,17 +390,15 @@ func googleAuthenticator(user string) (string, []string) {
 	endIndex := strings.Index(outStr[startIndex:], "\n")
 
 	if startIndex == -1 || endIndex == -1 {
-		logger.ErrorFatal("Could not find URL")
-
+		return "", nil, errors.New("Could not find URL")
 	}
 
 	url := outStr[startIndex : startIndex+endIndex]
 
-	var errQR error
 	var png []byte
-	png, errQR = qrcode.Encode(url, qrcode.Medium, 1024)
-	if errQR != nil {
-		logger.ErrorFatalf("Could not generate QR Code: %s\n", errQR)
+	png, err = qrcode.Encode(url, qrcode.Medium, 1024)
+	if err != nil {
+		return "", nil, err
 	}
 
 	logger.Defaultf("Creating qr directory if not exists")
@@ -328,7 +408,7 @@ func googleAuthenticator(user string) (string, []string) {
 	output, err = cmd.CombinedOutput()
 	if err != nil {
 		logger.Errorln(strings.TrimSuffix(string(output), "\n"))
-		logger.ErrorFatal(err.Error())
+		return "", nil, err
 	}
 
 	logger.Defaultf("Saving the QR code")
@@ -337,15 +417,14 @@ func googleAuthenticator(user string) (string, []string) {
 	// Write the PNG to a file
 	err = ioutil.WriteFile(qrFileName, png, 0644)
 	if err != nil {
-		logger.ErrorFatalf("Could not write file: %s\n", err)
+		return "", nil, err
 	}
 
 	startIndex = strings.Index(outStr, "Your new secret key is: ") + 24
 	endIndex = strings.Index(outStr[startIndex:], "\n")
 
 	if startIndex == -1 || endIndex == -1 {
-		logger.ErrorFatal("Could not find the secret key.")
-
+		return "", nil, errors.New("Could not find the secret key.")
 	}
 
 	secretKey := outStr[startIndex : startIndex+endIndex]
@@ -353,9 +432,9 @@ func googleAuthenticator(user string) (string, []string) {
 	// Find the scratch codes
 	startIndex = strings.Index(outStr, "Your emergency scratch codes are:")
 	if startIndex == -1 {
-		logger.ErrorFatal("Could not find scratch codes")
+		return "", nil, errors.New("Could not find scratch codes")
 	}
 	scratchCodes := strings.Split(outStr[startIndex:], "\n")[1:6]
 
-	return secretKey, scratchCodes
+	return secretKey, scratchCodes, nil
 }

@@ -9,6 +9,7 @@ require (
 
 require (
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826 // indirect
+	github.com/rashintha/env v1.0.0 // indirect
 	github.com/richardlehane/mscfb v1.0.4 // indirect
 	github.com/richardlehane/msoleps v1.0.3 // indirect
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e // indirect

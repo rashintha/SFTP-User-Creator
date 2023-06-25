@@ -5,3 +5,7 @@ qr/*
 *.docx
 doc/*
 documents/*
+.env
+IN
+OUT
+PROCESSED

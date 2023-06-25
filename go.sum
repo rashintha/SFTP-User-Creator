@@ -3,6 +3,8 @@ github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSs
 github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826 h1:RWengNIwukTxcDr9M+97sNutRR1RKhG96O6jWumTTnw=
 github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826/go.mod h1:TaXosZuwdSHYgviHp1DAtfrULt5eUgsSMsZf+YrPgl8=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+github.com/rashintha/env v1.0.0 h1:9mB2Fqw7AqGx1oy/Du0m1LfNKuHpx60VGsq1tiNah6w=
+github.com/rashintha/env v1.0.0/go.mod h1:N1dmTmKZzeuiG6A3Go9rQ+0HdmaU09wv3UfJ8ue7y1I=
 github.com/rashintha/logger v1.0.0 h1:UUJ80R/KMIZkeSWAEufkr+nm9uB3aYvocxHVSscfk+g=
 github.com/rashintha/logger v1.0.0/go.mod h1:hr1r+KW96jWd+kCPG0qp/z7+K/VDNzfNmlZ/iax1DaA=
 github.com/rashintha/logger v1.0.1 h1:/04joferX5TXUu7NaffM9fCZJud3shJbg902PjuYkTw=
