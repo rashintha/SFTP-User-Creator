@@ -15,7 +15,20 @@ SFTP User Creator is a service which takes an excel file as an input and creates
 
 ### SFTP Initial Server Setup
 
+#### Ubuntu
+
 You need to follow the below method in order to create a secure ftp server with 2FA before running the service.
+
+1. Install `ssh` and `google-authenticator`
+
+```bash
+sudo apt update
+sudo apt upgrade
+sudo apt install ssh
+sudo apt install libpam-google-authenticator
+```
+
+
 
 ## License
 
