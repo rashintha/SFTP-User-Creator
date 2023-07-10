@@ -111,10 +111,9 @@ func main() {
 					password := generatePassword(12)
 
 					logger.Defaultln("Updating password")
-					cmd = exec.Command("bash", "-c", "echo", fmt.Sprintf("'%v:%v'", username, password), "|", "sudo", "chpasswd") // replace "ls -l" with your command
-
-					// This will capture the output from the command
+					cmd = exec.Command("bash", "-c", fmt.Sprintf("echo '%s:%s' | sudo -S chpasswd", username, password))
 					output, err = cmd.CombinedOutput()
+
 					if err != nil {
 						logger.Errorln(strings.TrimSuffix(string(output), "\n"))
 						logger.Errorln(err.Error())
@@ -449,10 +448,9 @@ func createDir(dir string, user string) error {
 func generatePassword(length int) string {
 	rand.Seed(time.Now().UnixNano())
 	digits := "0123456789"
-	specials := "~=+%^*/()[]{}/!@#$?|"
 	all := "ABCDEFGHIJKLMNOPQRSTUVWXYZ" +
 		"abcdefghijklmnopqrstuvwxyz" +
-		digits + specials
+		digits
 	buf := make([]byte, length)
 	for i := range buf {
 		buf[i] = all[rand.Intn(len(all))]
